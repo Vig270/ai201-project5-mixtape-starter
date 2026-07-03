@@ -226,30 +226,36 @@ No missing entries in response
 
 -----------------
 
-✅ Bug #4 — Missing notification when rating a song
-1. Issue description
+Bug #4 — Missing notification when rating a song
 
-Users receive a notification when someone adds their song to a playlist, but they do not receive a notification when someone rates their song.
+How I reproduced it
 
-2. Where the bug was found
+I used a valid song_id and user_id and sent a POST request:
 
-services/notification_service.py → rate_song()
+POST /songs/<song_id>/rate
 
-3. Root cause
+I confirmed that:
 
-The rate_song() function correctly creates or updates a Rating record in the database, but it does not trigger a notification after a rating is saved.
+the rating was successfully created or updated in the database
+no notification entry was created for the song owner afterward
 
-As a result, even though ratings are stored correctly, no notification is created for the song owner, breaking consistency with other user interactions (like playlist additions, which already trigger notifications).
+This showed that rating actions were persisted correctly but did not trigger user notifications.
 
-4. How I reproduced it
-Used a valid song_id and user_id
-Sent a POST request to /songs/<song_id>/rate
-Verified that:
-Rating was saved in the database
-No new Notification entry was created for the song owner
-5. Fix implemented
+How I found the root cause (navigation strategy)
 
-Added a call to create_notification() inside rate_song() after the rating is saved and committed, and only if the rater is not the song owner.
+I traced execution starting from the route handler for /songs/<song_id>/rate, which calls rate_song() in services/notification_service.py. Inside this function, I inspected both the rating persistence logic and notification-related logic used in other functions (like add_to_playlist) for comparison.
+
+This made it clear that unlike playlist actions, the rating flow never triggered create_notification().
+
+Root cause
+
+The rate_song() function correctly creates or updates a Rating record and commits it to the database, but it does not trigger a notification after the rating is saved.
+
+As a result, even though ratings are stored correctly, the system never informs the song owner that their song was rated, creating inconsistency with other interaction types such as playlist additions.
+
+Fix applied and side-effect check
+
+I added a notification step after committing the rating, ensuring it only triggers when the rater is not the song owner:
 
 song = db.session.get(Song, song_id)
 
@@ -261,44 +267,44 @@ if song and song.shared_by != user_id:
         notification_type="song_rated",
         body=f"{rater.username} rated your song '{song.title}' {score} stars."
     )
-6. Why this fix works
 
-This ensures that every time a rating is created or updated:
+After the fix, I verified:
 
-The system checks who owns the song
-Prevents self-notifications
-Creates a Notification record for the song owner
-Keeps notification behavior consistent across services
-
-
+rating creation still works correctly for new and existing ratings
+notifications are generated only for valid external ratings
+no self-notifications are created
 
 --------------------------
 
 Bug #2 — Friends Listening Now shows incorrect or outdated activity
+
 How I reproduced it
 
-I opened the feed endpoint using a valid user ID:
+I started the Flask application and queried the feed endpoint for a valid user with known friend activity:
 
 GET /feed/<user_id>/listening-now
 
 Example:
-
 http://127.0.0.1:5000/feed/2c7aced5-4797-4274-8dd8-bb02c08001c9/listening-now
 
-The endpoint returned friend listening activity, but some results included unexpected or incorrectly filtered entries, and the feed logic was inconsistent depending on timestamp comparisons.
+The endpoint returned inconsistent results: sometimes the feed was empty and other times it returned partial friend activity, even though database records clearly existed within the expected time window.
+
+How I found the root cause (navigation strategy)
+
+I traced the request flow starting from routes/feed.py, which calls get_friends_listening_now() in services/feed_service.py. Inside that function, I focused on the filtering logic around cutoff and event.listened_at. I confirmed the function was correctly retrieving events from the database, so the issue had to be in the time filtering step.
 
 Root cause
 
-The issue was caused by a timezone mismatch in datetime comparisons:
+The bug was caused by a mismatch between timezone-aware and timezone-naive datetime objects during comparison.
 
-cutoff = datetime.now(timezone.utc) is timezone-aware
-event.listened_at from the database was timezone-naive
+cutoff = datetime.now(timezone.utc) produces a timezone-aware datetime
+event.listened_at from the database was stored as a naive datetime
 
-Python does not allow comparison between naive and aware datetimes, which caused incorrect filtering behavior (and could lead to crashes or invalid results depending on runtime path).
+Python does not allow reliable comparisons between aware and naive datetimes. This caused events to be incorrectly filtered out, since the comparison logic behaved inconsistently depending on runtime evaluation path.
 
-Fix applied
+Fix applied and side-effect check
 
-Normalized event.listened_at to UTC-aware before comparison:
+I normalized event.listened_at to be timezone-aware before performing the comparison:
 
 event_time = event.listened_at
 
@@ -307,11 +313,12 @@ if event_time.tzinfo is None:
 
 if event_time < cutoff:
     continue
-Result after fix
-Feed endpoint no longer throws datetime comparison errors
-Only recent friend activity is returned correctly
-Output is consistent and properly ordered by recency
-Endpoint responds successfully with valid JSON
+
+After applying the fix, I verified:
+
+the endpoint consistently returns only recent friend activity
+results are correctly ordered by recency
+no valid events are incorrectly filtered out
 
 
 -----------------------------
