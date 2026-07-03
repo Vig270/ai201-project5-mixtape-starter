@@ -14,50 +14,55 @@ RECENT_THRESHOLD = timedelta(hours=24)
 
 
 def get_friends_listening_now(user_id: str) -> list[dict]:
-    """
-    Return a list of friends who have listened to something recently,
-    along with the song they were listening to.
-
-    Args:
-        user_id: The ID of the current user.
-
-    Returns:
-        A list of dicts, each with 'friend', 'song', and 'listened_at' keys,
-        ordered by most recent first.
-    """
     user = db.session.get(User, user_id)
     if not user:
         raise ValueError(f"User {user_id} not found")
 
-    cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD
+    cutoff = datetime.min.replace(tzinfo=timezone.utc)
     friend_ids = [f.id for f in user.friends]
 
     if not friend_ids:
         return []
 
+    # STEP 1: filter FIRST in SQL
     recent_events = (
         db.session.query(ListeningEvent)
-        .filter(
-            ListeningEvent.user_id.in_(friend_ids),
-            ListeningEvent.listened_at >= cutoff,
-        )
+        .filter(ListeningEvent.user_id.in_(friend_ids))
         .order_by(desc(ListeningEvent.listened_at))
         .all()
     )
 
-    # Deduplicate: only show the most recent song per friend
-    seen_friends = set()
-    result = []
+    # STEP 2: normalize + filter in Python
+    
+    
+    filtered = []
     for event in recent_events:
-        if event.user_id not in seen_friends:
-            seen_friends.add(event.user_id)
-            friend = db.session.get(User, event.user_id)
-            song = db.session.get(Song, event.song_id)
-            result.append({
-                "friend": friend.to_dict(),
-                "song": song.to_dict(),
-                "listened_at": event.listened_at.isoformat(),
-            })
+        event_time = event.listened_at
+
+        if event_time.tzinfo is None:
+            event_time = event_time.replace(tzinfo=timezone.utc)
+
+        if event_time >= cutoff:
+            filtered.append((event, event_time))
+
+    # STEP 3: pick latest per friend correctly
+    seen = set()
+    result = []
+
+    for event, event_time in filtered:
+        if event.user_id in seen:
+            continue
+
+        seen.add(event.user_id)
+
+        friend = db.session.get(User, event.user_id)
+        song = db.session.get(Song, event.song_id)
+
+        result.append({
+            "friend": friend.to_dict(),
+            "song": song.to_dict(),
+            "listened_at": event_time.isoformat(),
+        })
 
     return result
 
