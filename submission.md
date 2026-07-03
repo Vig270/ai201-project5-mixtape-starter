@@ -343,3 +343,25 @@ The feed now correctly returns recent listening activity from friends, including
 
 -----------------------------
 
+
+AI Usage
+
+During this project, I used AI tools as a debugging and code navigation assistant rather than as a direct code generator. I used AI to help trace execution flow across the Flask application, especially when following route → service → model interactions. It helped me understand where to look in the codebase when diagnosing bugs in the services layer.
+
+I also used AI to clarify confusing behavior during debugging, such as differences in datetime handling (timezone-aware vs naive datetimes), SQLAlchemy query behavior, and Git workflow issues like commits vs working directory changes. In several cases, AI helped explain what specific code blocks were doing, but I verified all fixes manually by inspecting the code and testing endpoints through Flask shell or API requests.
+
+For Git-related issues, I used AI to understand how to properly restore files, interpret git status/output, and ensure that commits were correctly pushed to the remote branch. However, I did not rely on AI to determine the root cause of bugs without first tracing the code myself.
+
+Overall, AI was used as a support tool to accelerate understanding and debugging, but all final bug fixes were confirmed through direct code inspection and testing.
+
+
+
+
+
+
+
+
+
+
+
+
